@@ -27,7 +27,7 @@ export class KubeObjectListLayout extends React.Component<KubeObjectListLayoutPr
     disposeOnUnmount(this, [
       kubeWatchApi.subscribeStores(stores, {
         preload: true,
-        namespaces: store.context.contextNamespaces,
+        namespaces: store.context.selectedNamespaces,
       })
     ]);
   }

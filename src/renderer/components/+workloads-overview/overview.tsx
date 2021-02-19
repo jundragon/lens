@@ -33,7 +33,7 @@ export class WorkloadsOverview extends React.Component<Props> {
         jobStore, cronJobStore, eventStore,
       ], {
         preload: true,
-        namespaces: WorkloadsOverview.defaultContext.contextNamespaces,
+        namespaces: WorkloadsOverview.defaultContext.selectedNamespaces,
       }),
     ]);
   }

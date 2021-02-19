@@ -31,13 +31,18 @@ export class ClusterContext {
    * same as all the namespaces that exist (for certain) on the cluster
    * @param namespaces The list of namespaces to check
    */
-  public isAllPossibleNamespaces(namespaces: string[]): boolean {
-    return this.allNamespaces?.length > 1
+  public isAllPossibleNamespaces(namespaceList: string[], isFilterSelect = false): boolean {
+    const namespaces = new Set(namespaceList);
+
+    return this.allNamespaces.length > 1
       && this.cluster.accessibleNamespaces.length === 0
-      && this.allNamespaces.every(ns => namespaces.includes(ns));
+      && (
+        (isFilterSelect && namespaces.size === 0)
+        || this.allNamespaces.every(ns => namespaces.has(ns))
+      );
   }
 
-  get contextNamespaces(): string[] {
-    return namespaceStore.contextNamespaces ?? [];
+  get selectedNamespaces(): string[] {
+    return namespaceStore.selectedNamespaces ?? [];
   }
 }

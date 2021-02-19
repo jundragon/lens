@@ -35,7 +35,7 @@ export abstract class KubeObjectStore<T extends KubeObject = any> extends ItemSt
   }
 
   @computed get contextItems(): T[] {
-    const namespaces = this.context?.contextNamespaces ?? [];
+    const namespaces = this.context?.selectedNamespaces ?? [];
 
     return this.items.filter(item => {
       const itemNamespace = item.getNs();

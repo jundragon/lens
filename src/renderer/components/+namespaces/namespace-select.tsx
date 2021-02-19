@@ -23,7 +23,7 @@ interface Props extends SelectProps {
   showClusterOption?: boolean;
 
   /**
-   * how "All namespaces" option on the top (has precidence over `showClusterOption`)
+   * show "All namespaces" option on the top (has precedence over `showClusterOption`)
    * @default false
    */
   showAllNamespacesOption?: boolean;
@@ -56,7 +56,7 @@ export class NamespaceSelect extends React.Component<Props> {
 
   @computed.struct get options(): SelectOption[] {
     const { customizeOptions, showClusterOption, showAllNamespacesOption } = this.props;
-    const options: SelectOption[] = namespaceStore.contextNamespaces.map(ns => ({ value: ns }));
+    const options: SelectOption[] = namespaceStore.allowedNamespaces.map(ns => ({ value: ns }));
 
     if (showAllNamespacesOption) {
       options.unshift({ label: "All Namespaces", value: "" });

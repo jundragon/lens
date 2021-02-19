@@ -88,7 +88,7 @@ export class KubeWatchApi {
       }
 
       // reload stores only for context namespaces change
-      cancelReloading = reaction(() => this.context?.contextNamespaces, namespaces => {
+      cancelReloading = reaction(() => this.context?.selectedNamespaces, namespaces => {
         preloading?.cancelLoading();
         unsubscribeList.forEach(unsubscribe => unsubscribe());
         unsubscribeList.length = 0;
