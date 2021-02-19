@@ -147,7 +147,11 @@ export class NamespaceStore extends KubeObjectStore<Namespace> {
     return [namespaces].flat().every(namespace => this.contextNs.has(namespace));
   }
 
-  @computed get hasAllContexts(): boolean {
+  @computed get selectedAll(): boolean {
+    return this.context?.isAllPossibleNamespaces(this.contextNamespaces) ?? false;
+  }
+
+  @computed private get hasAllContexts(): boolean {
     return this.contextNs.size === this.allowedNamespaces.length;
   }
 

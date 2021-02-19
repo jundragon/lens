@@ -10,20 +10,40 @@ import { namespaceStore } from "./namespace.store";
 import { kubeWatchApi } from "../../api/kube-watch-api";
 
 interface Props extends SelectProps {
+  /**
+   * Show icons preceeding the entry names
+   * @default true
+   */
   showIcons?: boolean;
-  showClusterOption?: boolean; // show "Cluster" option on the top (default: false)
-  showAllNamespacesOption?: boolean; // show "All namespaces" option on the top (default: false)
+
+  /**
+   * show a "Cluster" option above all namespaces
+   * @default false
+   */
+  showClusterOption?: boolean;
+
+  /**
+   * how "All namespaces" option on the top (has precidence over `showClusterOption`)
+   * @default false
+   */
+  showAllNamespacesOption?: boolean;
+
+  /**
+   * A function to change the options for the select
+   * @param options the current options to display
+   * @default passthrough
+   */
   customizeOptions?(options: SelectOption[]): SelectOption[];
 }
 
-const defaultProps: Partial<Props> = {
-  showIcons: true,
-  showClusterOption: false,
-};
-
 @observer
 export class NamespaceSelect extends React.Component<Props> {
-  static defaultProps = defaultProps as object;
+  static defaultProps: Props = {
+    showIcons: true,
+    showClusterOption: false,
+    showAllNamespacesOption: false,
+    customizeOptions: (opts) => opts,
+  };
 
   componentDidMount() {
     disposeOnUnmount(this, [
@@ -36,7 +56,7 @@ export class NamespaceSelect extends React.Component<Props> {
 
   @computed.struct get options(): SelectOption[] {
     const { customizeOptions, showClusterOption, showAllNamespacesOption } = this.props;
-    let options: SelectOption[] = namespaceStore.items.map(ns => ({ value: ns.getName() }));
+    const options: SelectOption[] = namespaceStore.contextNamespaces.map(ns => ({ value: ns }));
 
     if (showAllNamespacesOption) {
       options.unshift({ label: "All Namespaces", value: "" });
@@ -44,11 +64,7 @@ export class NamespaceSelect extends React.Component<Props> {
       options.unshift({ label: "Cluster", value: "" });
     }
 
-    if (customizeOptions) {
-      options = customizeOptions(options);
-    }
-
-    return options;
+    return customizeOptions(options);
   }
 
   formatOptionLabel = (option: SelectOption) => {

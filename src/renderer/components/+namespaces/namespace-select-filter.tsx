@@ -15,9 +15,12 @@ const Placeholder = observer((props: PlaceholderProps<any>) => {
   const getPlaceholder = (): React.ReactNode => {
     const namespaces = namespaceStore.contextNamespaces;
 
+    if (namespaceStore.selectedAll) {
+      return <>All namespaces</>;
+    }
+
     switch (namespaces.length) {
       case 0:
-      case namespaceStore.allowedNamespaces.length:
         return <>All namespaces</>;
       case 1:
         return <>Namespace: {namespaces[0]}</>;
