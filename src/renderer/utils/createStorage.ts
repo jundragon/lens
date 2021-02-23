@@ -1,4 +1,5 @@
-// Helper for better work with web-storage api (e.g. window.localStorage)
+// Helper for work with storage api (e.g. window.localStorage)
+
 import { observable, toJS } from "mobx"
 import { Draft, produce } from "immer"
 
@@ -7,23 +8,23 @@ export function createStorage<T>(key: string, defaultValue?: T, options?: IStora
 }
 
 export interface IStorageHelperOptions<T = any> {
-  autoInit?: boolean; // default: true, preload data at early stage (in place of use)
-  observable?: boolean; // default: true, make state observable (keeps copy in memory)
-  webStorage?: "local" | "session" | false; // type of web-storage for persistence, "false" - skip saving
-  preload?(instance: StorageHelper<T>): T | Promise<T>; // customize initial data loading from the storage
+  autoInit?: boolean; // default: true, preload data at early stages (e.g. in place of use)
+  observable?: boolean; // default: true, keeps observable state in memory
+  webStorage?: "local" | "session" | false; // type of web-storage for persistence, "false" - skip saving to storage.
+  preload?(instance: StorageHelper<T>): T | Promise<T>; // customize data loading
 }
 
 export class StorageHelper<T> {
   static defaultOptions: IStorageHelperOptions = {
+    webStorage: "local",
     autoInit: true,
     observable: true,
-    webStorage: "local",
     preload: instance => instance.getStorageValue(),
   };
 
-  @observable.shallow protected value: T;
-  protected options: IStorageHelperOptions;
+  @observable.shallow protected data: T;
   protected initialized = false;
+  protected options: IStorageHelperOptions;
 
   constructor(readonly key: string, readonly defaultValue?: T, options: IStorageHelperOptions = {}) {
     this.options = { ...StorageHelper.defaultOptions, ...options };
@@ -53,10 +54,6 @@ export class StorageHelper<T> {
     }
   }
 
-  getObservableValue(): T {
-    return toJS(this.value);
-  }
-
   getStorageValue(): T {
     const rawValue = this.storage?.getItem(this.key);
 
@@ -72,7 +69,7 @@ export class StorageHelper<T> {
 
   get(): T {
     if (this.options.observable) {
-      return this.getObservableValue();
+      return this.data;
     }
 
     return this.getStorageValue();
@@ -80,15 +77,17 @@ export class StorageHelper<T> {
 
   set(value: T) {
     try {
-      if (this.options.observable) this.value = value;
       this.storage?.setItem(this.key, JSON.stringify(value));
+      if (this.options.observable) {
+        this.data = value;
+      }
     } catch (error) {
     }
   }
 
   merge(updater: (draft: Draft<T>) => Partial<T> | void) {
     try {
-      const currentValue = this.get();
+      const currentValue = toJS(this.get());
       const nextValue = produce(currentValue, updater) as T;
       this.set(nextValue);
     } catch (error) {
@@ -96,7 +95,7 @@ export class StorageHelper<T> {
   }
 
   clear() {
+    this.data = null;
     this.storage?.removeItem(this.key);
-    delete this.value;
   }
 }
