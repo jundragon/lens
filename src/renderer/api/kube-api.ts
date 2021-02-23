@@ -34,6 +34,11 @@ export interface IKubeApiOptions<T extends KubeObject> {
   checkPreferredVersion?: boolean;
 }
 
+export interface KubeApiListOptions {
+  namespace?: string;
+  reqInit?: RequestInit;
+}
+
 export interface IKubeApiQueryParams {
   watch?: boolean | number;
   resourceVersion?: string;
@@ -243,7 +248,7 @@ export class KubeApi<T extends KubeObject = any> {
     return this.resourceVersions.get(namespace);
   }
 
-  async refreshResourceVersion(params?: { namespace: string }) {
+  async refreshResourceVersion(params?: KubeApiListOptions) {
     return this.list(params, { limit: 1 });
   }
 
@@ -311,10 +316,10 @@ export class KubeApi<T extends KubeObject = any> {
     return null;
   }
 
-  async list({ namespace = "" } = {}, query?: IKubeApiQueryParams): Promise<T[] | null> {
+  async list({ namespace = "", reqInit }: KubeApiListOptions = {}, query?: IKubeApiQueryParams): Promise<T[] | null> {
     await this.checkPreferredVersion();
 
-    const res = await this.request.get(this.getUrl({ namespace }), { query });
+    const res = await this.request.get(this.getUrl({ namespace }), { query }, reqInit);
     const parsed = this.parseResponse(res, namespace);
 
     if (!parsed || !Array.isArray(parsed)) {
@@ -391,78 +396,64 @@ export class KubeApi<T extends KubeObject = any> {
   }
 
   watch(opts: KubeApiWatchOptions = { namespace: "" }): () => void {
-    if (!opts.abortController) {
-      opts.abortController = new AbortController();
-    }
     let errorReceived = false;
     let timedRetry: NodeJS.Timeout;
-    const { abortController, namespace, callback } = opts;
+    const { abortController: { abort, signal } = new AbortController(), namespace, callback } = opts;
 
-    abortController.signal.addEventListener("abort", () => {
+    signal.addEventListener("abort", () => {
       clearTimeout(timedRetry);
     });
 
     const watchUrl = this.getWatchUrl(namespace);
-    const responsePromise = this.request.getResponse(watchUrl, null, {
-      signal: abortController.signal
-    });
+    const responsePromise = this.request.getResponse(watchUrl, null, { signal });
 
-    responsePromise.then((response) => {
-      if (!response.ok && !abortController.signal.aborted) {
-        callback?.(null, response);
-
-        return;
-      }
-      const nodeStream = new ReadableWebToNodeStream(response.body);
-
-      ["end", "close", "error"].forEach((eventName) => {
-        nodeStream.on(eventName, () => {
-          if (errorReceived) return; // kubernetes errors should be handled in a callback
-
-          clearTimeout(timedRetry);
-          timedRetry = setTimeout(() => { // we did not get any kubernetes errors so let's retry
-            if (abortController.signal.aborted) return;
-
-            this.watch({...opts, namespace, callback});
-          }, 1000);
-        });
-      });
-
-      const stream = byline(nodeStream);
-
-      stream.on("data", (line) => {
-        try {
-          const event: IKubeWatchEvent = JSON.parse(line);
-
-          if (event.type === "ERROR" && event.object.kind === "Status") {
-            errorReceived = true;
-            callback(null, new KubeStatus(event.object as any));
-
-            return;
-          }
-
-          this.modifyWatchEvent(event);
-
-          if (callback) {
-            callback(event, null);
-          }
-        } catch (ignore) {
-          // ignore parse errors
+    responsePromise
+      .then(response => {
+        if (!response.ok) {
+          return callback?.(null, response);
         }
+
+        const nodeStream = new ReadableWebToNodeStream(response.body);
+
+        ["end", "close", "error"].forEach((eventName) => {
+          nodeStream.on(eventName, () => {
+            if (errorReceived) return; // kubernetes errors should be handled in a callback
+
+            clearTimeout(timedRetry);
+            timedRetry = setTimeout(() => { // we did not get any kubernetes errors so let's retry
+              this.watch({...opts, namespace, callback});
+            }, 1000);
+          });
+        });
+
+        const stream = byline(nodeStream);
+
+        stream.on("data", (line) => {
+          try {
+            const event: IKubeWatchEvent = JSON.parse(line);
+
+            if (event.type === "ERROR" && event.object.kind === "Status") {
+              errorReceived = true;
+              callback(null, new KubeStatus(event.object as any));
+
+              return;
+            }
+
+            this.modifyWatchEvent(event);
+
+            callback?.(event, null);
+          } catch (ignore) {
+          // ignore parse errors
+          }
+        });
+      })
+      .catch(error => {
+        if (error instanceof DOMException) return; // AbortController rejects, we can ignore it
+
+        callback?.(null, error);
       });
-    }, (error) => {
-      if (error instanceof DOMException) return; // AbortController rejects, we can ignore it
 
-      callback?.(null, error);
-    }).catch((error) => {
-      callback?.(null, error);
-    });
-
-    const disposer = () => {
-      abortController.abort();
-    };
-
-    return disposer;
+    return abort;
   }
 
   protected modifyWatchEvent(event: IKubeWatchEvent) {

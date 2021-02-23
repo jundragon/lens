@@ -1,7 +1,7 @@
 import type { ClusterContext } from "./components/context";
 
 import { action, computed, observable, reaction, when } from "mobx";
-import { autobind } from "./utils";
+import { autobind, noop, rejectPromiseBy } from "./utils";
 import { KubeObject, KubeStatus } from "./api/kube-object";
 import { IKubeWatchEvent } from "./api/kube-watch-api";
 import { ItemStore } from "./item.store";
@@ -9,10 +9,12 @@ import { apiManager } from "./api/api-manager";
 import { IKubeApiQueryParams, KubeApi, parseKubeApi } from "./api/kube-api";
 import { KubeJsonApiData } from "./api/kube-json-api";
 import { Notifications } from "./components/notifications";
+import { AbortController } from "abort-controller";
 
 export interface KubeObjectStoreLoadingParams {
   namespaces: string[];
   api?: KubeApi;
+  reqInit?: RequestInit;
 }
 
 @autobind()
@@ -22,9 +24,10 @@ export abstract class KubeObjectStore<T extends KubeObject = any> extends ItemSt
   abstract api: KubeApi<T>;
   public readonly limit?: number;
   public readonly bufferSize: number = 50000;
-  private loadedNamespaces: string[] = [];
+  @observable private loadedNamespaces?: string[];
 
   contextReady = when(() => Boolean(this.context));
+  namespacesReady = when(() => Boolean(this.loadedNamespaces));
 
   constructor() {
     super();
@@ -104,10 +107,10 @@ export abstract class KubeObjectStore<T extends KubeObject = any> extends ItemSt
     }
   }
 
-  protected async loadItems({ namespaces, api }: KubeObjectStoreLoadingParams): Promise<T[]> {
+  protected async loadItems({ namespaces, api, reqInit }: KubeObjectStoreLoadingParams): Promise<T[]> {
     if (this.context?.cluster.isAllowedResource(api.kind)) {
       if (!api.isNamespaced) {
-        return api.list({}, this.query);
+        return api.list({ reqInit }, this.query);
       }
 
       const isLoadingAll = this.context.allNamespaces.every(ns => namespaces.includes(ns));
@@ -115,12 +118,12 @@ export abstract class KubeObjectStore<T extends KubeObject = any> extends ItemSt
       if (isLoadingAll && this.context.cluster.accessibleNamespaces.length === 0) {
         this.loadedNamespaces = [];
 
-        return api.list({}, this.query);
+        return api.list({ reqInit }, this.query);
       } else {
         this.loadedNamespaces = namespaces;
 
         return Promise // load resources per namespace
-          .all(namespaces.map(namespace => api.list({ namespace })))
+          .all(namespaces.map(namespace => api.list({ namespace, reqInit })))
           .then(items => items.flat().filter(Boolean));
       }
     }
@@ -133,7 +136,7 @@ export abstract class KubeObjectStore<T extends KubeObject = any> extends ItemSt
   }
 
   @action
-  async loadAll(options: { namespaces?: string[], merge?: boolean } = {}): Promise<void | T[]> {
+  async loadAll(options: { namespaces?: string[], merge?: boolean, reqInit?: RequestInit } = {}): Promise<void | T[]> {
     await this.contextReady;
     this.isLoading = true;
 
@@ -141,9 +144,10 @@ export abstract class KubeObjectStore<T extends KubeObject = any> extends ItemSt
       const {
         namespaces = this.context.allNamespaces, // load all namespaces by default
         merge = true, // merge loaded items or return as result
+        reqInit,
       } = options;
 
-      const items = await this.loadItems({ namespaces, api: this.api });
+      const items = await this.loadItems({ namespaces, api: this.api, reqInit });
 
       this.isLoaded = true;
 
@@ -274,17 +278,21 @@ export abstract class KubeObjectStore<T extends KubeObject = any> extends ItemSt
 
   subscribe(apis = this.getSubscribeApis()) {
     const abortController = new AbortController();
-    const namespaces = [...this.loadedNamespaces];
 
-    if (this.context.cluster?.isGlobalWatchEnabled && namespaces.length === 0) {
-      apis.forEach(api => this.watchNamespace(api, "", abortController));
-    } else {
-      apis.forEach(api => {
-        this.loadedNamespaces.forEach((namespace) => {
-          this.watchNamespace(api, namespace, abortController);
-        });
-      });
-    }
+    // This waits for
+    Promise.race([rejectPromiseBy(abortController.signal), Promise.all([this.contextReady, this.namespacesReady])])
+      .then(() => {
+        if (this.context.cluster.isGlobalWatchEnabled && this.loadedNamespaces.length === 0) {
+          apis.forEach(api => this.watchNamespace(api, "", abortController));
+        } else {
+          apis.forEach(api => {
+            this.loadedNamespaces.forEach((namespace) => {
+              this.watchNamespace(api, namespace, abortController);
+            });
+          });
+        }
+      })
+      .catch(noop); // ignore DOMExceptions
 
     return () => {
       abortController.abort();
@@ -293,48 +301,38 @@ export abstract class KubeObjectStore<T extends KubeObject = any> extends ItemSt
 
   private watchNamespace(api: KubeApi<T>, namespace: string, abortController: AbortController) {
     let timedRetry: NodeJS.Timeout;
+    const watch = () => api.watch({
+      namespace,
+      abortController,
+      callback
+    });
 
-    abortController.signal.addEventListener("abort", () => clearTimeout(timedRetry));
+    const { signal } = abortController;
 
     const callback = (data: IKubeWatchEvent, error: any) => {
-      if (!this.isLoaded || abortController.signal.aborted) return;
+      if (!this.isLoaded || error instanceof DOMException) return;
 
       if (error instanceof Response) {
         if (error.status === 404) {
           // api has gone, let's not retry
           return;
         } else { // not sure what to do, best to retry
-          if (timedRetry) clearTimeout(timedRetry);
-          timedRetry = setTimeout(() => {
-            api.watch({
-              namespace,
-              abortController,
-              callback
-            });
-          }, 5000);
+          clearTimeout(timedRetry);
+          timedRetry = setTimeout(watch, 5000);
         }
       } else if (error instanceof KubeStatus && error.code === 410) {
-        if (timedRetry) clearTimeout(timedRetry);
+        clearTimeout(timedRetry);
         // resourceVersion has gone, let's try to reload
         timedRetry = setTimeout(() => {
-          (namespace === "" ? this.loadAll({ merge: false }) : this.loadAll({namespaces: [namespace]})).then(() => {
-            api.watch({
-              namespace,
-              abortController,
-              callback
-            });
-          });
+          (
+            namespace
+              ? this.loadAll({ namespaces: [namespace], reqInit: { signal } })
+              : this.loadAll({ merge: false, reqInit: { signal } })
+          ).then(watch);
         }, 1000);
-      } else if(error) { // not sure what to do, best to retry
-        if (timedRetry) clearTimeout(timedRetry);
-
-        timedRetry = setTimeout(() => {
-          api.watch({
-            namespace,
-            abortController,
-            callback
-          });
-        }, 5000);
+      } else if (error) { // not sure what to do, best to retry
+        clearTimeout(timedRetry);
+        timedRetry = setTimeout(watch, 5000);
       }
 
       if (data) {
@@ -342,11 +340,8 @@ export abstract class KubeObjectStore<T extends KubeObject = any> extends ItemSt
       }
     };
 
-    api.watch({
-      namespace,
-      abortController,
-      callback: (data, error) => callback(data, error)
-    });
+    signal.addEventListener("abort", () => clearTimeout(timedRetry));
+    watch();
   }
 
   @action

@@ -71,13 +71,11 @@ export class JsonApi<D = JsonApiData, P extends JsonApiParams = JsonApiParams> {
       reqUrl += (reqUrl.includes("?") ? "&" : "?") + queryString;
     }
 
-    const infoLog: JsonApiLog = {
+    this.writeLog({
       method: reqInit.method.toUpperCase(),
       reqUrl: reqPath,
       reqInit,
-    };
-
-    this.writeLog({ ...infoLog });
+    });
 
     return fetch(reqUrl, reqInit);
   }
